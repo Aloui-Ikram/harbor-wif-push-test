@@ -1,0 +1,65 @@
+name: Harbor WIF push test
+
+on:
+  workflow_dispatch:
+    inputs:
+      robot_name:
+        description: "Federated robot account name (to test manual's username claim)"
+        required: false
+        default: ""
+
+env:
+  REGISTRY: demo.container-registry.com
+  PROJECT: wif-push-test
+  IMAGE: hello
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Get OIDC token
+        run: |
+          RESPONSE=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${REGISTRY}")
+          TOKEN=$(echo "$RESPONSE" | jq -r '.value')
+          echo "::add-mask::$TOKEN"
+          echo "TOKEN=$TOKEN" >> $GITHUB_ENV
+          echo "=== JWT Payload (debug) ==="
+          echo "$TOKEN" | cut -d'.' -f2 | tr '_-' '/+' | base64 -d 2>/dev/null | jq 'del(.jti)' || true
+
+      - name: "Test 1: docker login -u jwt (blog's claim)"
+        run: |
+          echo "$TOKEN" | docker login -u jwt --password-stdin "$REGISTRY" \
+            && echo "RESULT: -u jwt WORKS" || echo "RESULT: -u jwt FAILS"
+
+      - name: "Test 2: docker login -u not-relevant (example's claim)"
+        run: |
+          docker logout "$REGISTRY" || true
+          echo "$TOKEN" | docker login -u not-relevant --password-stdin "$REGISTRY" \
+            && echo "RESULT: -u not-relevant WORKS" || echo "RESULT: -u not-relevant FAILS"
+
+      - name: "Test 3: docker login -u <robot-name> (manual's claim)"
+        if: ${{ inputs.robot_name != '' }}
+        run: |
+          docker logout "$REGISTRY" || true
+          echo "$TOKEN" | docker login -u '${{ inputs.robot_name }}' --password-stdin "$REGISTRY" \
+            && echo "RESULT: robot-name WORKS" || echo "RESULT: robot-name FAILS"
+
+      - name: Build and push
+        run: |
+          echo "$TOKEN" | docker login -u jwt --password-stdin "$REGISTRY"
+          docker build -t "$REGISTRY/$PROJECT/$IMAGE:${{ github.sha }}" .
+          docker push "$REGISTRY/$PROJECT/$IMAGE:${{ github.sha }}"
+
+      - name: Pull back (verify)
+        run: |
+          docker rmi "$REGISTRY/$PROJECT/$IMAGE:${{ github.sha }}"
+          docker pull "$REGISTRY/$PROJECT/$IMAGE:${{ github.sha }}"
+          docker run --rm "$REGISTRY/$PROJECT/$IMAGE:${{ github.sha }}"

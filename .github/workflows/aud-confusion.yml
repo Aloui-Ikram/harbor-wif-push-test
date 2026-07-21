@@ -1,0 +1,42 @@
+name: Audience confusion test
+
+on:
+  workflow_dispatch:
+
+env:
+  REGISTRY: demo.container-registry.com
+  PROJECT: wif-push-test
+  IMAGE: hello
+
+jobs:
+  wrong-audience:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Get OIDC token with a DELIBERATELY WRONG audience
+        run: |
+          RESPONSE=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=https://sts.amazonaws.com")
+          TOKEN=$(echo "$RESPONSE" | jq -r '.value')
+          echo "::add-mask::$TOKEN"
+          echo "TOKEN=$TOKEN" >> $GITHUB_ENV
+          echo "=== aud claim in this token (should NOT be the registry) ==="
+          echo "$TOKEN" | cut -d'.' -f2 | tr '_-' '/+' | base64 -d 2>/dev/null | jq '{aud, repository, iss}' || true
+
+      - name: Try to authenticate to Harbor with the wrong-audience token
+        run: |
+          if echo "$TOKEN" | docker login -u jwt --password-stdin "$REGISTRY"; then
+            echo "OUTCOME: LOGIN SUCCEEDED with aud=sts.amazonaws.com  -> audience NOT enforced"
+          else
+            echo "OUTCOME: login rejected -> audience enforced"; exit 0
+          fi
+
+      - name: Try an authenticated pull with the wrong-audience token
+        run: |
+          if docker pull "$REGISTRY/$PROJECT/$IMAGE:$(git rev-parse HEAD)" 2>/dev/null; then
+            echo "OUTCOME: PULL SUCCEEDED -> wrong-audience token is fully usable"
+          else
+            echo "note: login is the security-relevant check; pull tag may just not exist"
+          fi

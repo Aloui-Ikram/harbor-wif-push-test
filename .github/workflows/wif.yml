@@ -1,6 +1,8 @@
 name: Harbor WIF push test
 
 on:
+  push:
+    branches: [master]
   workflow_dispatch:
     inputs:
       robot_name:

@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
 
 env:
-  REGISTRY: 8gcr.container-registry.dev
+  REGISTRY: demo.container-registry.com
   PROJECT: wif-push-test
   IMAGE: hello
 
